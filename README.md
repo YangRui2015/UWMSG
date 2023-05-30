@@ -12,6 +12,7 @@ First install the requirements:
 pip install -r requirements/requirements_dev.txt
 ```
 
+### Under Random Attack
 Run UWMSG with random reward corruption:
 ```bash
 CUDA_VISIBLE_DEVICES=${gpu} python UWMSG.py --random_corruption  --corruption_reward --corruption_range ${corruption_range} --corruption_rate ${corruption_rate}  --env_name ${env_name} --seed ${seed} --use_UW 
@@ -23,6 +24,8 @@ Run UWMSG with random dynamics corruption:
 CUDA_VISIBLE_DEVICES=${gpu} python UWMSG.py --random_corruption  --corruption_dynamics --corruption_range ${corruption_range} --corruption_rate ${corruption_rate}  --env_name ${env_name} --seed ${seed} --use_UW 
 ```
 
+### Under Adversarial Attack
+
 Run UWMSG with adversarial reward corruption:
 ```bash
 CUDA_VISIBLE_DEVICES=${gpu} python UWMSG.py --corruption_reward --corruption_range ${corruption_range} --corruption_rate ${corruption_rate}  --env_name ${env_name} --seed ${seed} --use_UW 
@@ -32,6 +35,7 @@ Run UWMSG with adversarial dynamics corruption:
 ```bash
 CUDA_VISIBLE_DEVICES=${gpu} python UWMSG.py  --corruption_dynamics --corruption_range ${corruption_range} --corruption_rate ${corruption_rate}  --env_name ${env_name} --seed ${seed} --use_UW 
 ```
+Note the adversarial dynamics attack needs to load an offline dataset with corresponding attack ratio and attack scale. 
 
 ## Baselines
 You can replace the UWMSG.py with SACN.py and EDAC.py to run SACN and EDAC. In addition, by removing the flag '--use_UW', you can run the MSG algorithm.
