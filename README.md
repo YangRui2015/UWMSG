@@ -3,7 +3,7 @@
 This repo contains the official implemented UWMSG algorithm for the paper "Corruption-Robust Offline Reinforcement Learning with General Function Approximation".
 
 <div style="text-align: center;">
-<img src="figure_UWMSG.png" >
+<img src="/pic/figure_UWMSG.png" >
 </div>
 
 ## Getting started
