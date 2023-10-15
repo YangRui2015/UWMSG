@@ -1,6 +1,6 @@
 # Uncertainty Weighted MSG for Offline RL with Data Corruption
 
-This repo contains the official implemented UWMSG algorithm for the paper "Corruption-Robust Offline Reinforcement Learning with General Function Approximation".
+This repo contains the official implemented UWMSG algorithm for the NeurIPS 2023 paper "Corruption-Robust Offline Reinforcement Learning with General Function Approximation".
 
 
 ## Getting started
