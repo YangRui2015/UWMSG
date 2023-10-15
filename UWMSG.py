@@ -1,10 +1,3 @@
-# Inspired by:
-# 1. paper for SAC-N: https://arxiv.org/abs/2110.01548
-# 2. implementation: https://github.com/snu-mllab/EDAC
-
-# The only difference from the original implementation:
-# default pytorch weight initialization,
-# without custom rlkit init & uniform init for last layers.
 from typing import Any, Dict, List, Optional, Tuple, Union
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -22,6 +15,7 @@ from torch.distributions import Normal
 import torch.nn as nn
 from tqdm import trange
 import wandb
+from configs import get_attack_config, get_UWMSG_config
 
 def asdict(config):
     dic = {}
@@ -34,14 +28,9 @@ def asdict(config):
 @dataclass
 class TrainConfig:
     # wandb params
-    project: str = "Corrupt_random_new"
+    project: str = "Corruption_EDAC"
     group: str = 'MSG' 
-    # group: str = 'walker2d_reward_attack_reverse'
-    # group: str = "halfcheetah_dynamics_attack"
-    # group: str = "walker2d_dynamics_new2"
-    # group: str = "test"
-    # name: str = "SAC-10_corrupt100_0.2_QLCB4_targetLCB2_UW0.5_seed1" 
-    name: str = "MSG"    # _UW0.3
+    name: str = "MSG"   
     # model params
     hidden_dim: int = 256
     num_critics: int = 10
@@ -53,8 +42,7 @@ class TrainConfig:
     max_action: float = 1.0
     # training params
     buffer_size: int = 1_000_000
-    env_name: str = "halfcheetah-medium-v2" # 
-    # env_name: str = 'walker2d-medium-replay-v2' 
+    env_name: str = "halfcheetah-medium-v2" 
     batch_size: int = 256
     num_epochs: int = 3000     
     num_updates_on_epoch: int = 1000
@@ -63,43 +51,28 @@ class TrainConfig:
     eval_episodes: int = 10 
     eval_every: int = 10  
     # general params
-    checkpoints_path: Optional[str] = None #'./log_checpoints'
+    checkpoints_path: Optional[str] = None 
     deterministic_torch: bool = False
     train_seed: int = 0          
     eval_seed: int = 42
     log_every: int = 100
     device: str = "cuda"
-    LCB_ratio: float = 4.0      ############
-    target_LCB_ratio: float = 1.0 # no use
-    imitation_ratio: float = 0.0
+    LCB_ratio: float = 4.0     
     ######## attack
-    corrupt_model_path: str = '/home/ryangam/CORL-main/algorithms/log_checpoints2/SAC-10_QLCB4_seed0-walker2d-medium-replay-v2-f082528d/2000.pt'
-    corruption_reward: bool = True
+    # the path of the saved model to perform adversarial attack
+    corrupt_model_path: str = './log_checpoints/MSG-10_QLCB4_seed0-walker2d-medium-replay-v2-f082528d/2000.pt'
+    gradient_attack: bool = False # if true, perform adversarial gradient-based attack on the dynamics
+    corruption_reward: bool = False
     corruption_dynamics: bool = False
-    random_corruption: bool = True
-    corruption_range: float = 30   #0.3 for dynamics
-    corruption_rate: float = 0.3   # 0.3 halfcheetah, 0.2 walker2d
+    random_corruption: bool = False
+    corruption_range: float = 30  
+    corruption_rate: float = 0.3   
     ######## UW
     use_UW: bool = False
     uncertainty_ratio: float = 0.3
     uncertainty_basic: float = 0.0
     uncertainty_min: float = 1
     uncertainty_max: float = 10
-
-    # def __post_init__(self): 
-        # group_name_center = 'reward' if self.corruption_reward else 'dynamics'
-        # group_name_center = 'random_' + group_name_center if self.random_corruption else 'adversarial_' + group_name_center
-        # self.group = self.group + '-{}'.format(group_name_center) 
-        # self.group = self.group if self.env_name == 'halfcheetah-medium-v2' else self.group + '_{}'.format(self.env_name.split('-')[0])
-
-        # if self.use_UW:
-        #     self.name = "SAC-10_corrupt{}_{}_QLCB{}_UW{}_seed{}".format(self.corruption_range, self.corruption_rate,  self.LCB_ratio, self.uncertainty_ratio, self.train_seed)
-        # else:
-        #     self.name = "SAC-10_corrupt{}_{}_QLCB{}_seed{}".format(self.corruption_range, self.corruption_rate, self.LCB_ratio, self.train_seed)
-        
-        # self.name = f"{self.name}-{self.env_name}-{str(uuid.uuid4())[:8]}"
-        # if self.checkpoints_path is not None:
-        #     self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
 
 
 # general utils
@@ -350,8 +323,6 @@ class SACN:
         tau: float = 0.005,
         alpha_learning_rate: float = 1e-4,
         LCB_ratio: float = 4.0,
-        target_LCB_ratio: float = 1.0, 
-        imitation_ratio: float = 3.0,
         use_UW: bool = False,
         uncertainty_ratio: float = 1,
         uncertainty_basic: float = 1.0,
@@ -372,8 +343,6 @@ class SACN:
         self.tau = tau
         self.gamma = gamma
         self.LCB_ratio = LCB_ratio
-        self.target_LCB_ratio = target_LCB_ratio
-        self.imitation_ratio = imitation_ratio
 
         # uncertainty weight
         self.use_UW = use_UW
@@ -403,14 +372,11 @@ class SACN:
         action, action_log_prob = self.actor(state, need_log_prob=True)
         q_value_dist = self.critic(state, action)
         assert q_value_dist.shape[0] == self.critic.num_critics
-        # q_value_min = q_value_dist.min(0).values               # Note: this is similar to LCB 
         q_value_min = q_value_dist.mean(0).view(1, -1) - self.LCB_ratio * q_value_dist.std(0).view(1, -1)
         # needed for logging
         q_value_std = q_value_dist.std(0).mean().item()
         batch_entropy = -action_log_prob.mean().item()
-        # assert action_log_prob.shape == q_value_min.shape
         loss = (self.alpha * action_log_prob.view(1, -1) - q_value_min).mean() 
-        #+ self.imitation_ratio * ((action - action_old) ** 2).mean()
         return loss, batch_entropy, q_value_std
 
     def _critic_loss(
@@ -425,38 +391,21 @@ class SACN:
             next_action, next_action_log_prob = self.actor(
                 next_state, need_log_prob=True
             )
-            # target_values = self.target_critic(next_state, next_action)
-            # q_next = target_values.mean(0) - self.target_LCB_ratio * target_values.std(0) # Note: this is similar to LCB
-            # q_next = q_next - self.alpha * next_action_log_prob
-            # #### independent ######################################################################
             q_next = self.target_critic(next_state, next_action)
             q_next = q_next - self.alpha * next_action_log_prob.view(1,-1)
-
-            ##### shared
-            # assert q_next.unsqueeze(-1).shape == done.shape == reward.shape
-            # q_target = reward + self.gamma * (1 - done) * q_next.unsqueeze(-1).detach() 
-            # ############# independent #######################################################
             q_target = reward.view(1,-1) + self.gamma * (1 - done.view(1,-1)) * q_next.detach()
 
         q_values = self.critic(state, action)
         # [ensemble_size, batch_size] - [1, batch_size]
         if self.use_UW:
             self.uncertainty = torch.clip(self.uncertainty_basic + self.uncertainty_ratio * q_values.std(dim=0).view(1,-1).detach(), self.uncertainty_min, self.uncertainty_max)
-            ####### shared
-            # loss = ((q_values - q_target.view(1, -1)) ** 2 / self.uncertainty).mean(dim=1).sum(dim=0)
-            ###### independent
             loss = ((q_values - q_target) ** 2 / self.uncertainty).mean(dim=1).sum(dim=0)
         else:
-            ######## independent ##################
             loss = ((q_values - q_target) ** 2).mean(dim=1).sum(dim=0)
-            ###### shared
-            # loss = ((q_values - q_target.view(1, -1)) ** 2).mean(dim=1).sum(dim=0)
         return loss
 
     def update(self, batch: TensorBatch) -> Dict[str, float]:
         state, action, reward, next_state, done = [arr.to(self.device) for arr in batch]
-        # Usually updates are done in the following order: critic -> actor -> alpha
-        # But we found that EDAC paper uses reverse (which gives better results)
 
         # Alpha update
         alpha_loss = self._alpha_loss(state)
@@ -467,7 +416,6 @@ class SACN:
         self.alpha = self.log_alpha.exp().detach()
 
         # Actor update
-        # actor_loss, actor_batch_entropy, q_policy_std = self._actor_loss(state)
         actor_loss, actor_batch_entropy, q_policy_std = self._actor_loss(state, action)
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
@@ -594,7 +542,6 @@ def corrupt_dynamics_func(d4rl_dataset, load_path, state_dim, action_dim, config
             para = torch.nn.Parameter(para.clone(), requires_grad=True)
             optimizer = torch.optim.Adam([para], lr=step_size * eps) 
             loss = loss_fun(observation, para)
-            # print(loss.mean().detach().cpu())
             # optimize noised obs
             optimizer.zero_grad()
             loss.mean().backward()
@@ -616,8 +563,6 @@ def corrupt_dynamics_func(d4rl_dataset, load_path, state_dim, action_dim, config
         para = sample_random(number).reshape(-1, state_dim)
         para = optimize_para(para, temp_obs, _loss_Q, update_times, step_size, config.corruption_range, obs_std_torch)
         noise_obs_final = para.detach()
-        ### replace data in replay buffer with noise_obs_final
-        # d4rl_dataset["next_observations"][indexs[0][i*split:i*split + number]] = noise_obs_final.cpu().numpy().reshape(-1, state_dim)
         attack_obs[pointer:pointer + number] = noise_obs_final.cpu().numpy().reshape(-1, state_dim) + temp_obs.cpu().numpy().reshape(-1, state_dim)
         pointer += number
     
@@ -629,8 +574,9 @@ def corrupt_dynamics_func(d4rl_dataset, load_path, state_dim, action_dim, config
     save_dict = {}
     save_dict['index'] = indexs
     save_dict['next_observations'] = attack_obs 
-    path = os.path.join('./log_attack_data/walker2d_new_diverse/', "attack_data_corrupt{}_rate{}.pt".format(config.corruption_range, config.corruption_rate))
-    if not os.path.exists('./log_attack_data/walker2d_new_diverse/'):
+    env_dir = config.env_name.split('-')[0]
+    path = os.path.join('./log_attack_data/{}/'.format(env_dir), "attack_data_corrupt{}_rate{}.pt".format(config.corruption_range, config.corruption_rate))
+    if not os.path.exists('./log_attack_data/{}/'.format(env_dir)):
         os.makedirs(path)
     torch.save(save_dict,path)
     
@@ -678,39 +624,17 @@ def train(config: TrainConfig):
             
             if config.corruption_dynamics:
                 print('attack dynamics')
-                env_dir = 'walker2d_new_diverse' if config.env_name.startswith('walker2d') else 'halfcheetah'
+                env_dir = config.env_name.split('-')[0]
+                if config.gradient_attack:
+                    corrupt_dynamics_func(d4rl_dataset, config.corrupt_model_path, state_dim, action_dim, config)
+                    import pdb;pdb.set_trace()
+                    # you can stop here and check the saved attack data
                 print('loading path {}'.format(os.path.join('./log_attack_data/{}/'.format(env_dir), "attack_data_corrupt{}_rate{}.pt".format(config.corruption_range, config.corruption_rate))))
                 data_dict = torch.load(os.path.join('./log_attack_data/{}/'.format(env_dir), "attack_data_corrupt{}_rate{}.pt".format(config.corruption_range, config.corruption_rate)))
                 attack_indexs, next_observations  = data_dict['index'], data_dict['next_observations']
                 d4rl_dataset["next_observations"][attack_indexs] = next_observations
 
 
-    # if config.corruption_reward:
-    #     random_num = np.random.random(d4rl_dataset["rewards"].shape)
-    #     indexs = np.where(random_num < config.corruption_rate)
-    #     # corrupt rewards
-    #     d4rl_dataset["rewards"][indexs] *= - config.corruption_range
-
-    #     # # corrupt above 75%
-    #     # indexs_a = np.where(d4rl_dataset["rewards"] > np.percentile(d4rl_dataset["rewards"], 50))[0]
-    #     # random_num = np.random.random(indexs_a.shape)
-    #     # indexs_a = indexs_a[random_num < config.corruption_rate]
-    #     # d4rl_dataset['rewards'][indexs_a] -= config.corruption_range * np.abs(d4rl_dataset['rewards'][indexs_a])
-    #     # # corrupt below 25%
-    #     # indexs_b = np.where(d4rl_dataset["rewards"] < np.percentile(d4rl_dataset["rewards"], 50))[0]
-    #     # random_num = np.random.random(indexs_b.shape)
-    #     # indexs_b = indexs_b[random_num < config.corruption_rate]
-    #     # d4rl_dataset['rewards'][indexs_b] += config.corruption_range * np.abs(d4rl_dataset['rewards'][indexs_b])
-
-
-    # if config.corruption_dynamics:
-    #     # corrupt_dynamics_func(d4rl_dataset, config.corrupt_model_path, state_dim, action_dim, config)
-    #     # import pdb;pdb.set_trace()
-    #     # #############
-    #     data_dict = torch.load(os.path.join('./log_attack_data/walker2d_new_diverse/', "attack_data_corrupt{}_rate{}.pt".format(config.corruption_range, config.corruption_rate)))
-    #     attack_indexs, next_observations  = data_dict['index'], data_dict['next_observations']
-    #     d4rl_dataset["next_observations"][attack_indexs] = next_observations
-        
 
     buffer = ReplayBuffer(
         state_dim=state_dim,
@@ -741,8 +665,6 @@ def train(config: TrainConfig):
         tau=config.tau,
         alpha_learning_rate=config.alpha_learning_rate,
         LCB_ratio=config.LCB_ratio,
-        target_LCB_ratio=config.target_LCB_ratio,
-        imitation_ratio=config.imitation_ratio,
         use_UW=config.use_UW,
         uncertainty_ratio=config.uncertainty_ratio,
         uncertainty_basic=config.uncertainty_basic,
@@ -807,6 +729,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_name', type=str, default='halfcheetah-medium-v2')
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--use_default_parameters', action='store_true', default=False)
     parser.add_argument('--corruption_reward', action='store_true', default=False)
     parser.add_argument('--corruption_dynamics', action='store_true', default=False)
     parser.add_argument('--random_corruption', action='store_true', default=False)
@@ -826,6 +749,10 @@ if __name__ == "__main__":
     TrainConfig.corruption_range = args.corruption_range
     TrainConfig.corruption_rate = args.corruption_rate
     TrainConfig.use_UW = args.use_UW
+    if args.use_default_parameters:
+        get_attack_config(TrainConfig)
+        get_UWMSG_config(TrainConfig)
+
 
     ## modify config
     group_name_center = 'reward' if TrainConfig.corruption_reward else 'dynamics'
@@ -834,7 +761,7 @@ if __name__ == "__main__":
     TrainConfig.group = TrainConfig.group if TrainConfig.env_name == 'halfcheetah-medium-v2' else TrainConfig.group + '_{}'.format(TrainConfig.env_name.split('-')[0])
     
     if args.use_UW:
-        name = "MSG_corrupt{}_{}_QLCB{}_UW{}_seed{}".format(TrainConfig.corruption_range, TrainConfig.corruption_rate,  TrainConfig.LCB_ratio, TrainConfig.uncertainty_ratio, TrainConfig.train_seed)
+        name = "UWMSG_corrupt{}_{}_QLCB{}_UW{}_seed{}".format(TrainConfig.corruption_range, TrainConfig.corruption_rate,  TrainConfig.LCB_ratio, TrainConfig.uncertainty_ratio, TrainConfig.train_seed)
     else:
         name = "MSG_corrupt{}_{}_QLCB{}_seed{}".format(TrainConfig.corruption_range, TrainConfig.corruption_rate, TrainConfig.LCB_ratio, TrainConfig.train_seed)
     
