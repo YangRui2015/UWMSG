@@ -1,10 +1,7 @@
 # Uncertainty Weighted MSG for Offline RL with Data Corruption
 
-This repository contains the official implementation of the UWMSG algorithm for the paper "Corruption-Robust Offline Reinforcement Learning with General Function Approximation". The code is based on the open-source library [CORL](https://github.com/tinkoff-ai/CORL).
+This repo contains the official implemented UWMSG algorithm for the paper "Corruption-Robust Offline Reinforcement Learning with General Function Approximation".
 
-<div style="text-align: center;">
-<img src="/pic/figure_UWMSG.png" >
-</div>
 
 ## Getting started
 First install the requirements:
@@ -39,7 +36,6 @@ Note the adversarial dynamics attack needs to load an offline dataset in the 'lo
 
 ## Baselines
 You can replace the UWMSG.py with SACN.py and EDAC.py to run SACN and EDAC. In addition, by removing the flag '--use_UW', you can run the MSG algorithm.
-
 
 
 

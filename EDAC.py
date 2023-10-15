@@ -1,6 +1,3 @@
-# Inspired by:
-# 1. paper for SAC-N: https://arxiv.org/abs/2110.01548
-# 2. implementation: https://github.com/snu-mllab/EDAC
 from typing import Any, Dict, List, Optional, Tuple, Union
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -18,6 +15,8 @@ from torch.distributions import Normal
 import torch.nn as nn
 from tqdm import trange
 import wandb
+from UWMSG import corrupt_dynamics_func
+from configs import get_attack_config
 
 def asdict(config):
     dic = {}
@@ -47,7 +46,6 @@ class TrainConfig:
     # training params
     buffer_size: int = 1_000_000
     env_name: str = "halfcheetah-medium-v2"
-    # env_name: str = 'walker2d-medium-replay-v2' 
     batch_size: int = 256
     num_epochs: int = 3000
     num_updates_on_epoch: int = 1000
@@ -64,21 +62,14 @@ class TrainConfig:
     device: str = "cuda"
 
     ###### corruption
+    corrupt_model_path: str = './log_checpoints/EDAC-10_QLCB4_seed0-walker2d-medium-replay-v2-f082528d/2000.pt'
+    gradient_attack: bool = False # if true, perform adversarial gradient-based attack on the dynamics
     corruption_reward: bool = False
     corruption_dynamics: bool = False
     random_corruption: bool = False
-    corruption_range: float = 0.3   #0.3 for dynamics
-    corruption_rate: float = 0.1   # 0.3 halfcheetah, 0.2 walker2d
+    corruption_range: float = 1.0
+    corruption_rate: float = 0.3
 
-    # def __post_init__(self):
-    #     group_name_center = 'reward' if self.corruption_reward else 'dynamics'
-    #     group_name_center = 'random_' + group_name_center if self.random_corruption else 'adversarial_' + group_name_center
-    #     self.group = self.group + '-{}'.format(group_name_center) 
-    #     self.group = self.group if self.env_name == 'halfcheetah-medium-v2' else self.group + '_{}'.format(self.env_name.split('-')[0])
-    #     self.name = "EDAC_corrupt{}_{}_seed{}".format(self.corruption_range, self.corruption_rate, self.train_seed)
-    #     self.name = f"{self.name}-{self.env_name}-{str(uuid.uuid4())[:8]}"
-    #     if self.checkpoints_path is not None:
-    #         self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
 
 
 # general utils
@@ -602,8 +593,13 @@ def train(config: TrainConfig):
                 d4rl_dataset["rewards"][indexs] *= - config.corruption_range
             
             if config.corruption_dynamics:
+                # load the corrupted data 
                 print('attack dynamics')
-                env_dir = 'walker2d_new_diverse' if config.env_name.startswith('walker2d') else 'halfcheetah'
+                if config.gradient_attack:
+                    corrupt_dynamics_func(d4rl_dataset, config.corrupt_model_path, state_dim, action_dim, config)
+                    import pdb;pdb.set_trace()
+                    # you can stop here and check the saved attack data
+                env_dir = config.env_name.split('-')[0]
                 print('loading path {}'.format(os.path.join('./log_attack_data/{}/'.format(env_dir), "attack_data_corrupt{}_rate{}.pt".format(config.corruption_range, config.corruption_rate))))
                 data_dict = torch.load(os.path.join('./log_attack_data/{}/'.format(env_dir), "attack_data_corrupt{}_rate{}.pt".format(config.corruption_range, config.corruption_rate)))
                 attack_indexs, next_observations  = data_dict['index'], data_dict['next_observations']
@@ -695,11 +691,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_name', type=str, default='halfcheetah-medium-v2')
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--use_default_parameters', action='store_true', default=False)
     parser.add_argument('--corruption_reward', action='store_true', default=False)
     parser.add_argument('--corruption_dynamics', action='store_true', default=False)
     parser.add_argument('--random_corruption', action='store_true', default=False)
-    parser.add_argument('--corruption_range', type=float, default=0.3)
-    parser.add_argument('--corruption_rate', type=float, default=0.1)
+    parser.add_argument('--corruption_range', type=float, default=1.0)
+    parser.add_argument('--corruption_rate', type=float, default=0.3)
     args = parser.parse_args()
     print(args)
 
@@ -711,12 +708,15 @@ if __name__ == "__main__":
     TrainConfig.random_corruption = args.random_corruption
     TrainConfig.corruption_range = args.corruption_range
     TrainConfig.corruption_rate = args.corruption_rate
+    if args.use_default_parameters:
+        get_attack_config(TrainConfig)
+
 
     ## modify config
     group_name_center = 'reward' if TrainConfig.corruption_reward else 'dynamics'
     group_name_center = 'random_' + group_name_center if TrainConfig.random_corruption else 'adversarial_' + group_name_center
     TrainConfig.group = TrainConfig.group + '-{}'.format(group_name_center) 
-    TrainConfig.group = TrainConfig.group if TrainConfig.env_name == 'halfcheetah-medium-v2' else TrainConfig.group + '_{}'.format(TrainConfig.env_name.split('-')[0])
+    TrainConfig.group = TrainConfig.group + '_{}'.format(TrainConfig.env_name.split('-')[0])
     TrainConfig.name = "EDAC_corrupt{}_{}_seed{}".format(TrainConfig.corruption_range, TrainConfig.corruption_rate, TrainConfig.train_seed)
     TrainConfig.name = f"{TrainConfig.name}-{TrainConfig.env_name}-{str(uuid.uuid4())[:8]}"
     if TrainConfig.checkpoints_path is not None:
