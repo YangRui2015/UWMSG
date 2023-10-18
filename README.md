@@ -42,7 +42,7 @@ If you find our work helpful for your research, please cite:
 @inproceedings{
 ye2023corruptionrobust,
 title={Corruption-Robust Offline Reinforcement Learning with General Function Approximation},
-author={Ye, Chenlu and Yang, Rui and Gu Quanquan and Zhang, Tong},
+author={Ye, Chenlu and Yang, Rui and Gu, Quanquan and Zhang, Tong},
 booktitle={Advances in Neural Information Processing Systems},
 year={2023}
 url={https://openreview.net/forum?id=K9M7XNS9BX}
